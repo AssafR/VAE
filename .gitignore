@@ -1,18 +1,60 @@
-*.pyc
-*.ckpt
-*.pkl
-*.mat
+# Configuration files with sensitive data
+config.yaml
+.env
+.env.local
+.env.*.local
 
-__pycache__/
-.idea/
-*.pdf
-*.png
-*.eps
-*.txt
-results*/
-requirements.txt.bak
-uv.lock
+# Hugging Face Hub
+.huggingface/
+
+# Checkpoints and models
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+VAEmodel.pkl
+
+# Data files
+*.zip
 *.pkl
-prepare_celeba_patched.py
+*.h5
+*.hdf5
+*.csv
 img_align_celeba.zip
+data_fold_*.pkl
+
+# Results and samples
+results/
+results_rec/
+results_gen/
+*.png
+*.jpg
+*.jpeg
+
+# Metrics
+metrics.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
 

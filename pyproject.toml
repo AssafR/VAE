@@ -5,7 +5,7 @@ requires-python = ">=3.9"
 dependencies = [
     "dlutils>=0.0.12",
     "gdown>=5.2.0",
-    "huggingface-hub>=0.34.4",
+    "huggingface-hub[hf-xet]>=0.34.4",
     "imageio>=2.37.0",
     "matplotlib>=3.9.4",
     "numpy>=2.0.2",
