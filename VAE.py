@@ -27,6 +27,8 @@ import random
 import os
 import torch
 from tqdm import tqdm
+from config import *
+from checkpoint_manager import CheckpointManager
 
 
 use_cuda = torch.cuda.is_available()
@@ -88,22 +90,49 @@ def loss_function(recon_x, x, mu, logvar):
 # process_batch function removed - replaced by CelebADataset.__getitem__
 
 def main():
-    batch_size = 128
-    z_size = 512
-    vae = VAE(zsize=z_size, layer_count=5)
+    # Print configuration status once
+    from config import print_config_status
+    print_config_status()
+    
+    # Initialize checkpoint manager
+    checkpoint_manager = CheckpointManager()
+    
+    # Check if we can resume from checkpoint
+    can_resume, start_epoch = checkpoint_manager.get_resume_info()
+    
+    # Initialize model
+    vae = VAE(zsize=Z_SIZE, layer_count=LAYER_COUNT)
     vae.to(device)
     vae.train()
     vae.weight_init(mean=0, std=0.02)
 
-    lr = 0.0005
-
-    vae_optimizer = optim.Adam(vae.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=1e-5)
+    # Initialize optimizer
+    vae_optimizer = optim.Adam(vae.parameters(), lr=LEARNING_RATE, betas=(0.5, 0.999), weight_decay=1e-5)
  
-    train_epoch = 40
+    # Load checkpoint if available
+    if can_resume:
+        print(f"🚀 [TRAINING] Resuming from epoch {start_epoch:02d}")
+        loaded_epoch, loaded_metrics = checkpoint_manager.load_latest_checkpoint(vae, vae_optimizer)
+        start_epoch = loaded_epoch
+    else:
+        start_epoch = 0
+        print("🚀 [TRAINING] Starting fresh training")
 
-    sample1 = torch.randn(128, z_size, device=device).view(-1, z_size, 1, 1)
+    # Create sample tensor for generation
+    sample1 = torch.randn(128, Z_SIZE, device=device).view(-1, Z_SIZE, 1, 1)
 
-    for epoch in range(train_epoch):
+    # Save initial checkpoint (epoch 0) if starting from scratch
+    if start_epoch == 0:
+        print("🎯 [TRAINING] Creating initial checkpoint (epoch 00)")
+        initial_metrics = {
+            "rec_loss": 0.0,
+            "kl_loss": 0.0,
+            "total_loss": 0.0,
+            "lr": vae_optimizer.param_groups[0]['lr']
+        }
+        checkpoint_manager.save_checkpoint(vae, vae_optimizer, 0, initial_metrics)
+
+    for epoch in range(start_epoch, TRAIN_EPOCHS):
         vae.train()
 
         with open('data_fold_%d.pkl' % (epoch % 5), 'rb') as pkl:
@@ -112,11 +141,13 @@ def main():
         print("Train set size:", len(data_train))
 
         # Create modern PyTorch Dataset and DataLoader
-        dataset = CelebADataset(data_train, im_size=im_size, normalize="0_1")
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+        dataset = CelebADataset(data_train, im_size=IM_SIZE, normalize="0_1")
+        dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
 
         rec_loss = 0
         kl_loss = 0
+        epoch_rec_loss = 0  # Track total epoch loss
+        epoch_kl_loss = 0   # Track total epoch loss
 
         epoch_start_time = time.time()
 
@@ -125,7 +156,7 @@ def main():
             print("learning rate change!")
 
         i = 0
-        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{train_epoch}")
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{TRAIN_EPOCHS}")
         for x in pbar:
             vae.train()
             x = x.to(device)
@@ -141,6 +172,8 @@ def main():
             vae_optimizer.step()
             rec_loss += loss_re.item()
             kl_loss += loss_kl.item()
+            epoch_rec_loss += loss_re.item()  # Accumulate epoch total
+            epoch_kl_loss += loss_kl.item()   # Accumulate epoch total
             
             # Update progress bar with current losses
             pbar.set_postfix({
@@ -163,7 +196,7 @@ def main():
                 rec_loss /= m
                 kl_loss /= m
                 tqdm.write('[%d/%d] - ptime: %.2f, rec loss: %.9f, KL loss: %.9f' % (
-                    (epoch + 1), train_epoch, per_epoch_ptime, rec_loss, kl_loss))
+                    (epoch + 1), TRAIN_EPOCHS, per_epoch_ptime, rec_loss, kl_loss))
                 rec_loss = 0
                 kl_loss = 0
                 with torch.no_grad():
@@ -181,7 +214,18 @@ def main():
 
         del dataloader
         del data_train
-    print("Training finish!... save training results")
+        
+        # Save checkpoint after every epoch
+        epoch_metrics = {
+            "rec_loss": epoch_rec_loss / (i + 1) if i > 0 else 0.0,
+            "kl_loss": epoch_kl_loss / (i + 1) if i > 0 else 0.0,
+            "total_loss": (epoch_rec_loss + epoch_kl_loss) / (i + 1) if i > 0 else 0.0,
+            "lr": vae_optimizer.param_groups[0]['lr']
+        }
+        print(f"🎯 [TRAINING] Epoch {epoch + 1:02d} complete - saving checkpoint")
+        checkpoint_manager.save_checkpoint(vae, vae_optimizer, epoch, epoch_metrics)
+    
+    print("Training finish!... save final model")
     torch.save(vae.state_dict(), "VAEmodel.pkl")
 
 if __name__ == '__main__':
