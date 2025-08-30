@@ -10,3 +10,5 @@ __pycache__/
 *.eps
 *.txt
 results*/
+requirements.txt.bak
+
