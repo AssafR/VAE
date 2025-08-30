@@ -11,4 +11,8 @@ __pycache__/
 *.txt
 results*/
 requirements.txt.bak
+uv.lock
+*.pkl
+prepare_celeba_patched.py
+img_align_celeba.zip
 
