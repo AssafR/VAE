@@ -104,7 +104,6 @@ def main():
     vae = VAE(zsize=Z_SIZE, layer_count=LAYER_COUNT)
     vae.to(device)
     vae.train()
-    vae.weight_init(mean=0, std=0.02)
 
     # Initialize optimizer
     vae_optimizer = optim.Adam(vae.parameters(), lr=LEARNING_RATE, betas=(0.5, 0.999), weight_decay=1e-5)
@@ -118,8 +117,8 @@ def main():
         start_epoch = 0
         print("🚀 [TRAINING] Starting fresh training")
 
-    # Create sample tensor for generation
-    sample1 = torch.randn(128, Z_SIZE, device=device).view(-1, Z_SIZE, 1, 1)
+    # Create sample tensor for generation (using modern method)
+    sample1 = torch.randn(128, Z_SIZE, device=device)
 
     # Save initial checkpoint (epoch 0) if starting from scratch
     if start_epoch == 0:
@@ -135,14 +134,17 @@ def main():
     for epoch in range(start_epoch, TRAIN_EPOCHS):
         vae.train()
 
+        print(f"🔄 [EPOCH {epoch+1:02d}] Loading data fold...")
         with open('data_fold_%d.pkl' % (epoch % 5), 'rb') as pkl:
             data_train = pickle.load(pkl)
 
-        print("Train set size:", len(data_train))
+        print(f"📊 [EPOCH {epoch+1:02d}] Train set size: {len(data_train)}")
 
+        print(f"🔧 [EPOCH {epoch+1:02d}] Creating dataset and dataloader...")
         # Create modern PyTorch Dataset and DataLoader
         dataset = CelebADataset(data_train, im_size=IM_SIZE, normalize="0_1")
         dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
+        print(f"✅ [EPOCH {epoch+1:02d}] Data preparation complete")
 
         rec_loss = 0
         kl_loss = 0

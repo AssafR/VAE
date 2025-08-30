@@ -14,88 +14,262 @@
 # ==============================================================================
 
 import torch
-from torch import nn
-from torch.nn import functional as F
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Tuple, Optional
+
+
+class ConvBlock(nn.Module):
+    """Convolutional block with batch normalization and activation."""
+    
+    def __init__(self, in_channels: int, out_channels: int, activation: str = "relu"):
+        super().__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1)
+        self.bn = nn.BatchNorm2d(out_channels)
+        
+        if activation == "relu":
+            self.activation = nn.ReLU(inplace=True)
+        elif activation == "leaky_relu":
+            self.activation = nn.LeakyReLU(0.2, inplace=True)
+        else:
+            raise ValueError(f"Unknown activation: {activation}")
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.activation(self.bn(self.conv(x)))
+
+
+class DeconvBlock(nn.Module):
+    """Transposed convolutional block with batch normalization and activation."""
+    
+    def __init__(self, in_channels: int, out_channels: int, activation: str = "leaky_relu"):
+        super().__init__()
+        self.deconv = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1)
+        self.bn = nn.BatchNorm2d(out_channels)
+        
+        if activation == "leaky_relu":
+            self.activation = nn.LeakyReLU(0.2, inplace=True)
+        elif activation == "relu":
+            self.activation = nn.ReLU(inplace=True)
+        else:
+            raise ValueError(f"Unknown activation: {activation}")
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.activation(self.bn(self.deconv(x)))
 
 
 class VAE(nn.Module):
-    def __init__(self, zsize, layer_count=3, channels=3):
-        super(VAE, self).__init__()
-
-        d = 128
-        self.d = d
+    """
+    Variational Autoencoder with modern PyTorch architecture.
+    
+    Args:
+        zsize: Dimension of the latent space
+        layer_count: Number of convolutional layers in encoder/decoder
+        channels: Number of input channels (default: 3 for RGB)
+        base_channels: Base number of channels (default: 128)
+    """
+    
+    def __init__(self, zsize: int, layer_count: int = 3, channels: int = 3, base_channels: int = 128):
+        super().__init__()
+        
         self.zsize = zsize
-
         self.layer_count = layer_count
-
-        mul = 1
-        inputs = channels
-        for i in range(self.layer_count):
-            setattr(self, "conv%d" % (i + 1), nn.Conv2d(inputs, d * mul, 4, 2, 1))
-            setattr(self, "conv%d_bn" % (i + 1), nn.BatchNorm2d(d * mul))
-            inputs = d * mul
-            mul *= 2
-
-        self.d_max = inputs
-
-        self.fc1 = nn.Linear(inputs * 4 * 4, zsize)
-        self.fc2 = nn.Linear(inputs * 4 * 4, zsize)
-
-        self.d1 = nn.Linear(zsize, inputs * 4 * 4)
-
-        mul = inputs // d // 2
-
-        for i in range(1, self.layer_count):
-            setattr(self, "deconv%d" % (i + 1), nn.ConvTranspose2d(inputs, d * mul, 4, 2, 1))
-            setattr(self, "deconv%d_bn" % (i + 1), nn.BatchNorm2d(d * mul))
-            inputs = d * mul
-            mul //= 2
-
-        setattr(self, "deconv%d" % (self.layer_count + 1), nn.ConvTranspose2d(inputs, channels, 4, 2, 1))
-
-    def encode(self, x):
-        for i in range(self.layer_count):
-            x = F.relu(getattr(self, "conv%d_bn" % (i + 1))(getattr(self, "conv%d" % (i + 1))(x)))
-
-        x = x.view(x.shape[0], self.d_max * 4 * 4)
-        h1 = self.fc1(x)
-        h2 = self.fc2(x)
-        return h1, h2
-
-    def reparameterize(self, mu, logvar):
+        self.channels = channels
+        self.base_channels = base_channels
+        
+        # Calculate channel dimensions for each layer
+        self.encoder_channels = [channels]
+        
+        current_channels = channels
+        for i in range(layer_count):
+            current_channels = base_channels * (2 ** i)
+            self.encoder_channels.append(current_channels)
+        
+        # Decoder channels should mirror encoder channels (excluding input)
+        self.decoder_channels = list(reversed(self.encoder_channels[1:]))
+        self.decoder_channels.append(channels)  # Final output layer
+        
+        # Encoder layers
+        self.encoder_layers = nn.ModuleList()
+        for i in range(layer_count):
+            in_ch = self.encoder_channels[i]
+            out_ch = self.encoder_channels[i + 1]
+            self.encoder_layers.append(ConvBlock(in_ch, out_ch, activation="relu"))
+        
+        # Calculate the size after encoding
+        self.encoded_size = self.encoder_channels[-1] * 4 * 4
+        
+        # Latent space projections
+        self.fc_mu = nn.Linear(self.encoded_size, zsize)
+        self.fc_logvar = nn.Linear(self.encoded_size, zsize)
+        
+        # Decoder projection
+        self.fc_decoder = nn.Linear(zsize, self.encoded_size)
+        
+        # Decoder layers
+        self.decoder_layers = nn.ModuleList()
+        for i in range(layer_count - 1):
+            in_ch = self.decoder_channels[i]
+            out_ch = self.decoder_channels[i + 1]
+            self.decoder_layers.append(DeconvBlock(in_ch, out_ch, activation="leaky_relu"))
+        
+        # Final output layer (no batch norm, tanh activation)
+        self.final_layer = nn.ConvTranspose2d(
+            self.decoder_channels[-2], 
+            channels, 
+            kernel_size=4, 
+            stride=2, 
+            padding=1
+        )
+        
+        # Initialize weights
+        self.apply(self._init_weights)
+        
+        # Debug: Print channel dimensions
+        print(f"🔧 [ARCHITECTURE] Encoder channels: {self.encoder_channels}")
+        print(f"🔧 [ARCHITECTURE] Decoder channels: {self.decoder_channels}")
+        print(f"🔧 [ARCHITECTURE] Encoded size: {self.encoded_size}")
+    
+    def _init_weights(self, module: nn.Module) -> None:
+        """Initialize weights using Xavier/Glorot initialization."""
+        if isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
+            nn.init.xavier_normal_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.BatchNorm2d):
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Linear):
+            nn.init.xavier_normal_(module.weight)
+            nn.init.zeros_(module.bias)
+    
+    def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Encode input tensor to latent space.
+        
+        Args:
+            x: Input tensor of shape (batch_size, channels, height, width)
+            
+        Returns:
+            Tuple of (mu, logvar) tensors for the latent space
+        """
+        # Validate input shape
+        if x.dim() != 4:
+            raise ValueError(f"Expected 4D input tensor, got {x.dim()}D")
+        
+        # Apply encoder layers
+        for layer in self.encoder_layers:
+            x = layer(x)
+        
+        # Flatten and project to latent space
+        x = x.view(x.size(0), -1)
+        mu = self.fc_mu(x)
+        logvar = self.fc_logvar(x)
+        
+        return mu, logvar
+    
+    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
+        """
+        Reparameterization trick for sampling from the latent space.
+        
+        Args:
+            mu: Mean tensor
+            logvar: Log variance tensor
+            
+        Returns:
+            Sampled latent vector
+        """
         if self.training:
             std = torch.exp(0.5 * logvar)
             eps = torch.randn_like(std)
-            return eps.mul(std).add_(mu)
+            return mu + eps * std
         else:
             return mu
-
-    def decode(self, x):
-        x = x.view(x.shape[0], self.zsize)
-        x = self.d1(x)
-        x = x.view(x.shape[0], self.d_max, 4, 4)
-        #x = self.deconv1_bn(x)
-        x = F.leaky_relu(x, 0.2)
-
-        for i in range(1, self.layer_count):
-            x = F.leaky_relu(getattr(self, "deconv%d_bn" % (i + 1))(getattr(self, "deconv%d" % (i + 1))(x)), 0.2)
-
-        x = F.tanh(getattr(self, "deconv%d" % (self.layer_count + 1))(x))
+    
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """
+        Decode latent vector to reconstructed image.
+        
+        Args:
+            z: Latent vector of shape (batch_size, zsize)
+            
+        Returns:
+            Reconstructed image tensor
+        """
+        # Validate input shape
+        if z.dim() != 2 or z.size(1) != self.zsize:
+            raise ValueError(f"Expected latent tensor of shape (batch_size, {self.zsize}), got {z.shape}")
+        
+        # Project to spatial dimensions
+        x = self.fc_decoder(z)
+        x = x.view(x.size(0), self.encoder_channels[-1], 4, 4)
+        
+        # Apply decoder layers
+        for layer in self.decoder_layers:
+            x = layer(x)
+        
+        # Final output layer with tanh activation
+        x = self.final_layer(x)
+        x = torch.tanh(x)
+        
         return x
-
-    def forward(self, x):
+    
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Forward pass through the VAE.
+        
+        Args:
+            x: Input tensor of shape (batch_size, channels, height, width)
+            
+        Returns:
+            Tuple of (reconstructed_image, mu, logvar)
+        """
         mu, logvar = self.encode(x)
-        mu = mu.squeeze()
-        logvar = logvar.squeeze()
         z = self.reparameterize(mu, logvar)
-        return self.decode(z.view(-1, self.zsize, 1, 1)), mu, logvar
+        reconstructed = self.decode(z)
+        
+        return reconstructed, mu, logvar
+    
+    def sample(self, num_samples: int, device: Optional[torch.device] = None) -> torch.Tensor:
+        """
+        Generate samples from the latent space.
+        
+        Args:
+            num_samples: Number of samples to generate
+            device: Device to generate samples on
+            
+        Returns:
+            Generated image tensor
+        """
+        if device is None:
+            device = next(self.parameters()).device
+        
+        # Sample from standard normal distribution
+        z = torch.randn(num_samples, self.zsize, device=device)
+        
+        # Generate images
+        with torch.no_grad():
+            samples = self.decode(z)
+        
+        return samples
+    
+    def get_latent_representation(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Get the latent representation of input images without sampling.
+        
+        Args:
+            x: Input tensor
+            
+        Returns:
+            Mean of the latent representation
+        """
+        mu, _ = self.encode(x)
+        return mu
 
-    def weight_init(self, mean, std):
-        for m in self._modules:
-            normal_init(self._modules[m], mean, std)
 
-
-def normal_init(m, mean, std):
-    if isinstance(m, nn.ConvTranspose2d) or isinstance(m, nn.Conv2d):
-        m.weight.data.normal_(mean, std)
-        m.bias.data.zero_()
+# Backward compatibility - keep the old function name
+def normal_init(m: nn.Module, mean: float, std: float) -> None:
+    """Legacy weight initialization function for backward compatibility."""
+    if isinstance(m, (nn.ConvTranspose2d, nn.Conv2d)):
+        nn.init.normal_(m.weight, mean, std)
+        if m.bias is not None:
+            nn.init.zeros_(m.bias)

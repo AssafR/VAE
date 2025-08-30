@@ -1,0 +1,30 @@
+# VAE Training Configuration Template
+# Copy this file to config.yaml and edit with your actual values
+# DO NOT commit config.yaml to git (it contains your token!)
+
+# Hugging Face Hub Configuration
+huggingface:
+  username: "your_username_here"  # ← EDIT ME: Your HF username
+  repo_name: "vae-celeba"         # ← EDIT ME: Your repo name
+  repo_type: "model"
+  token: "your_huggingface_token_here"  # ← EDIT ME: Get from https://huggingface.co/settings/tokens
+
+# Training Configuration
+training:
+  batch_size: 128
+  z_size: 512
+  epochs: 40
+  learning_rate: 0.0005
+  checkpoint_interval: 5  # Save checkpoint every N epochs
+  sample_interval: 60     # Generate samples every N iterations
+
+# Model Configuration
+model:
+  layer_count: 5
+  im_size: 128
+
+# Paths
+paths:
+  checkpoint_dir: "checkpoints"
+  results_dir: "results"
+  data_dir: "."
