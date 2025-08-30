@@ -165,23 +165,11 @@ class CheckpointManager:
             print(f"Failed to download from Hub: {e}")
             return None
     
-        def _load_checkpoint(self, 
+    def _load_checkpoint(self, 
                          checkpoint_path: Path, 
                          model: torch.nn.Module, 
                          optimizer: torch.optim.Optimizer) -> Tuple[int, Dict[str, float]]:
         """Load checkpoint into model and optimizer"""
-        
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
-        
-        # Load model state
-        model.load_state_dict(checkpoint["model_state_dict"])
-        
-        # Load optimizer state
-        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        
-        # Get epoch and metrics
-        epoch = checkpoint.get("epoch", 0)
-        metrics = checkpoint.get("metrics", {})
         
         # Use tqdm.write for better integration with progress bars
         try:
@@ -190,11 +178,25 @@ class CheckpointManager:
         except ImportError:
             write_func = print
         
-        write_func(f"   ✅ Loaded checkpoint from epoch {epoch:02d}")
+        write_func(f"   📥 Loading checkpoint data...")
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        
+        write_func(f"   🔄 Loading model weights...")
+        model.load_state_dict(checkpoint["model_state_dict"])
+        
+        write_func(f"   🔄 Loading optimizer state...")
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        
+        # Get epoch and metrics
+        epoch = checkpoint.get("epoch", 0)
+        metrics = checkpoint.get("metrics", {})
+        
+        write_func(f"   ✅ Checkpoint loaded successfully!")
+        write_func(f"   📊 Epoch: {epoch:02d}")
         if metrics:
             rec_loss = metrics.get("rec_loss", 0.0)
             kl_loss = metrics.get("kl_loss", 0.0)
-            write_func(f"   📊 Previous metrics - Rec: {rec_loss:.6f}, KL: {kl_loss:.6f}")
+            write_func(f"   📈 Previous metrics - Rec: {rec_loss:.6f}, KL: {kl_loss:.6f}")
         
         return epoch, metrics
     
@@ -246,7 +248,8 @@ class CheckpointManager:
         if local_checkpoint:
             checkpoint = torch.load(local_checkpoint, map_location="cpu")
             epoch = checkpoint.get("epoch", 0)
-            write_func(f"🔄 [RESUME] Can resume from epoch {epoch:02d} (local)")
+            write_func(f"🔄 [RESUME] Found checkpoint from epoch {epoch:02d} (local)")
+            write_func(f"   🚀 Will resume training from epoch {epoch + 1:02d}")
             return True, epoch + 1
         
         if HF_TOKEN:
@@ -255,7 +258,8 @@ class CheckpointManager:
                 if hub_checkpoint:
                     checkpoint = torch.load(hub_checkpoint, map_location="cpu")
                     epoch = checkpoint.get("epoch", 0)
-                    write_func(f"🔄 [RESUME] Can resume from epoch {epoch:02d} (Hub)")
+                    write_func(f"🔄 [RESUME] Found checkpoint from epoch {epoch:02d} (Hub)")
+                    write_func(f"   🚀 Will resume training from epoch {epoch + 1:02d}")
                     return True, epoch + 1
             except:
                 pass

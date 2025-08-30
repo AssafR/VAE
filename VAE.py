@@ -111,7 +111,7 @@ def main():
  
     # Load checkpoint if available
     if can_resume:
-        print(f"🚀 [TRAINING] Resuming from epoch {start_epoch:02d}")
+        print(f"🚀 [TRAINING] Resuming training...")
         loaded_epoch, loaded_metrics = checkpoint_manager.load_latest_checkpoint(vae, vae_optimizer)
         start_epoch = loaded_epoch
     else:
@@ -223,7 +223,7 @@ def main():
             "lr": vae_optimizer.param_groups[0]['lr']
         }
         print(f"🎯 [TRAINING] Epoch {epoch + 1:02d} complete - saving checkpoint")
-        checkpoint_manager.save_checkpoint(vae, vae_optimizer, epoch, epoch_metrics)
+        checkpoint_manager.save_checkpoint(vae, vae_optimizer, epoch + 1, epoch_metrics)
     
     print("Training finish!... save final model")
     torch.save(vae.state_dict(), "VAEmodel.pkl")
