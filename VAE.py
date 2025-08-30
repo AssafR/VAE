@@ -15,8 +15,9 @@
 
 from __future__ import print_function
 import torch.utils.data
-from scipy import misc
+from PIL import Image
 from torch import optim
+from torch.utils.data import Dataset, DataLoader
 from torchvision.utils import save_image
 from net import *
 import numpy as np
@@ -24,10 +25,53 @@ import pickle
 import time
 import random
 import os
-from dlutils import batch_provider
-from dlutils.pytorch.cuda_helper import *
+import torch
+from tqdm import tqdm
+
+
+use_cuda = torch.cuda.is_available()
+device = torch.device("cuda" if use_cuda else "cpu")
 
 im_size = 128
+
+
+class CelebADataset(Dataset):
+    """Modern PyTorch Dataset for CelebA images"""
+    
+    def __init__(self, data_list, im_size=128, normalize="0_1"):
+        self.data_list = data_list
+        self.im_size = im_size
+        self.normalize = normalize
+    
+    def __len__(self):
+        return len(self.data_list)
+    
+    def __getitem__(self, idx):
+        x = self.data_list[idx]
+        
+        # Ensure HxWxC
+        if x.ndim == 2:  # grayscale
+            x = np.stack([x, x, x], axis=-1)
+        elif x.ndim == 3 and x.shape[2] == 4:  # RGBA -> RGB
+            x = x[:, :, :3]
+
+        # Resize with Pillow
+        x = np.array(Image.fromarray(x).resize((self.im_size, self.im_size), Image.Resampling.BILINEAR))
+
+        # To CHW
+        x = x.transpose(2, 0, 1)  # (C,H,W)
+        
+        # Convert to float32 tensor
+        x = torch.from_numpy(x.astype(np.float32))
+        
+        # Normalize
+        if self.normalize == "0_1":
+            x /= 255.0
+        elif self.normalize == "m1_1":
+            x = (x / 127.5) - 1.0
+        
+        # Return CPU tensor - DataLoader will handle device transfer
+        return x
 
 
 def loss_function(recon_x, x, mu, logvar):
@@ -41,19 +85,13 @@ def loss_function(recon_x, x, mu, logvar):
     return BCE, KLD * 0.1
 
 
-def process_batch(batch):
-    data = [misc.imresize(x, [im_size, im_size]).transpose((2, 0, 1)) for x in batch]
-
-    x = torch.from_numpy(np.asarray(data, dtype=np.float32)).cuda() / 127.5 - 1.
-    x = x.view(-1, 3, im_size, im_size)
-    return x
-
+# process_batch function removed - replaced by CelebADataset.__getitem__
 
 def main():
     batch_size = 128
     z_size = 512
     vae = VAE(zsize=z_size, layer_count=5)
-    vae.cuda()
+    vae.to(device)
     vae.train()
     vae.weight_init(mean=0, std=0.02)
 
@@ -63,7 +101,7 @@ def main():
  
     train_epoch = 40
 
-    sample1 = torch.randn(128, z_size).view(-1, z_size, 1, 1)
+    sample1 = torch.randn(128, z_size, device=device).view(-1, z_size, 1, 1)
 
     for epoch in range(train_epoch):
         vae.train()
@@ -73,9 +111,9 @@ def main():
 
         print("Train set size:", len(data_train))
 
-        random.shuffle(data_train)
-
-        batches = batch_provider(data_train, batch_size, process_batch, report_progress=True)
+        # Create modern PyTorch Dataset and DataLoader
+        dataset = CelebADataset(data_train, im_size=im_size, normalize="0_1")
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
 
         rec_loss = 0
         kl_loss = 0
@@ -87,9 +125,15 @@ def main():
             print("learning rate change!")
 
         i = 0
-        for x in batches:
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{train_epoch}")
+        for x in pbar:
             vae.train()
-            vae.zero_grad()
+            x = x.to(device)
+            # vae.zero_grad() # not needed for modern PyTorch
+            vae_optimizer.zero_grad()
+            # x.zero_grad() # removed - not needed for input tensors
+            x.requires_grad = False
+            
             rec, mu, logvar = vae(x)
 
             loss_re, loss_kl = loss_function(rec, x, mu, logvar)
@@ -97,6 +141,12 @@ def main():
             vae_optimizer.step()
             rec_loss += loss_re.item()
             kl_loss += loss_kl.item()
+            
+            # Update progress bar with current losses
+            pbar.set_postfix({
+                'rec_loss': f'{loss_re.item():.6f}',
+                'kl_loss': f'{loss_kl.item():.6f}'
+            })
 
             #############################################
 
@@ -112,7 +162,7 @@ def main():
             if i % m == 0:
                 rec_loss /= m
                 kl_loss /= m
-                print('\n[%d/%d] - ptime: %.2f, rec loss: %.9f, KL loss: %.9f' % (
+                tqdm.write('[%d/%d] - ptime: %.2f, rec loss: %.9f, KL loss: %.9f' % (
                     (epoch + 1), train_epoch, per_epoch_ptime, rec_loss, kl_loss))
                 rec_loss = 0
                 kl_loss = 0
@@ -129,7 +179,7 @@ def main():
                     save_image(resultsample.view(-1, 3, im_size, im_size),
                                'results_gen/sample_' + str(epoch) + "_" + str(i) + '.png')
 
-        del batches
+        del dataloader
         del data_train
     print("Training finish!... save training results")
     torch.save(vae.state_dict(), "VAEmodel.pkl")
