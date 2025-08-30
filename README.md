@@ -1,3 +1,5 @@
+Forked from <A HREF='https://github.com/podgorskiy/VAE'>
+
 # Variational Autoencoder
 Example of vanilla VAE for face image generation at resolution 128x128.
 
